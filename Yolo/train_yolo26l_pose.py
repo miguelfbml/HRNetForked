@@ -317,6 +317,20 @@ class MPIDatasetConverter:
         print("\nProcessing training data...")
         processed_count = 0
         skipped_count = 0
+        total_camera_entries = 0
+        camera_entries_with_images = 0
+        missing_camera_folders = 0
+
+        def resolve_camera_folder(subject, sequence, cam_key):
+            candidates = [
+                os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{cam_key}'),
+                os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{int(cam_key)}') if str(cam_key).isdigit() else None,
+                os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{int(cam_key):02d}') if str(cam_key).isdigit() else None,
+            ]
+            for candidate in candidates:
+                if candidate and os.path.exists(candidate):
+                    return candidate
+            return None
 
         for seq_name, seq_data in tqdm(annotations.items(), desc="Processing training sequences"):
             if not isinstance(seq_data, list) or len(seq_data) < 1:
@@ -332,12 +346,16 @@ class MPIDatasetConverter:
                 [k for k in camera_dict.keys() if isinstance(camera_dict[k], dict) and 'data_2d' in camera_dict[k]],
                 key=lambda x: int(x) if str(x).isdigit() else str(x)
             )
+            total_camera_entries += len(camera_keys)
 
             for cam_key in camera_keys:
                 camera_data = camera_dict[cam_key]
                 poses_2d = camera_data['data_2d']
-                image_folder = os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{cam_key}')
-                if not os.path.exists(image_folder):
+                image_folder = resolve_camera_folder(subject, sequence, cam_key)
+                if image_folder is None:
+                    missing_camera_folders += 1
+                    if missing_camera_folders <= 10:
+                        print(f"Warning: Missing image folder for {subject} {sequence} cam {cam_key}")
                     continue
 
                 image_files = glob.glob(os.path.join(image_folder, "*.jpg"))
@@ -345,6 +363,8 @@ class MPIDatasetConverter:
                 image_files.sort()
                 if not image_files:
                     continue
+
+                camera_entries_with_images += 1
 
                 max_frames = min(len(image_files), len(poses_2d))
                 for frame_idx in range(max_frames):
@@ -378,6 +398,10 @@ class MPIDatasetConverter:
                         skipped_count += 1
 
         print(f"Training split: wrote {processed_count} samples, skipped {skipped_count}")
+        print(
+            f"Training camera coverage: {camera_entries_with_images}/{total_camera_entries} camera streams had images "
+            f"(missing camera folders: {missing_camera_folders})"
+        )
 
     def process_test_data(self, test_annotations):
         print("\nProcessing validation data from MPI test split...")
