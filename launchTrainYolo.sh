@@ -21,4 +21,5 @@ python train_yolo26l_pose.py \
     --patience 20 \
     --cache disk \
     --use-wandb \
+    --force-reprocess \
     --wandb-project YOLO_MPI_3DHP_26L
