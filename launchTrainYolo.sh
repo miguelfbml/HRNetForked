@@ -11,7 +11,7 @@ cd data/preprocess/Yolov11
 
 python train_yolo26l_pose.py \
     --base-path /nas-ctm01/datasets/public/mpi_inf_3dhp \
-    --annotations-path ../../motion3d/data_train_3dhp.npz \
+    --annotations-path /motion3d/data_train_3dhp.npz \
     --epochs 100 \
     --batch-size 8 \
     --img-size 640 \
@@ -21,5 +21,5 @@ python train_yolo26l_pose.py \
     --patience 20 \
     --cache disk \
     --use-wandb \
-    --wandb-project YOLO_MPI_3DHP_Enhanced_Keypoints \
+    --wandb-project YOLO_MPI_3DHP_26L \
     --train-only
