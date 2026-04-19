@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH --partition=gpu_min32gb     # Reserved partition
+#SBATCH --qos=gpu_min32gb
+#SBATCH --job-name=YoloTrain_Enhanced
+#SBATCH --output=slurm_%x.%j.out
+#SBATCH --error=slurm_%x.%j.err
+
+echo "Starting Enhanced YOLO training on MPI-INF-3DHP for superior keypoint accuracy"
+
+cd data/preprocess/Yolov11
+
+python train_yolo26l_pose.py \
+    --base-path /nas-ctm01/datasets/public/mpi_inf_3dhp \
+    --annotations-path ../../motion3d/data_train_3dhp.npz \
+    --epochs 100 \
+    --batch-size 8 \
+    --img-size 640 \
+    --lr auto \
+    --device 0 \
+    --workers 8 \
+    --patience 20 \
+    --cache disk \
+    --use-wandb \
+    --wandb-project YOLO_MPI_3DHP_Enhanced_Keypoints \
+    --train-only
