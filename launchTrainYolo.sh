@@ -12,7 +12,7 @@ cd Yolo
 python train_yolo26l_pose.py \
     --base-path /nas-ctm01/datasets/public/mpi_inf_3dhp \
     --annotations-path ../motion3d/data_train_3dhp.npz \
-    --output-path /nas-ctm01/datasets/public/mpi_inf_3dhp_Yolo \
+    --output-path /nas-ctm01/datasets/public/mpi_inf_3dhp_Yolo26 \
     --epochs 100 \
     --batch-size 32 \
     --img-size 640 \
