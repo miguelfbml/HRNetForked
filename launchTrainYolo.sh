@@ -14,7 +14,7 @@ python train_yolo26l_pose.py \
     --annotations-path /motion3d/data_train_3dhp.npz \
     --output-path /nas-ctm01/datasets/public/mpi_inf_3dhp_Yolo \
     --epochs 100 \
-    --batch-size 8 \
+    --batch-size 32 \
     --img-size 640 \
     --device 0 \
     --workers 8 \
