@@ -10,8 +10,15 @@ from __future__ import print_function
 
 import numpy as np
 
-from .cpu_nms import cpu_nms
-from .gpu_nms import gpu_nms
+try:
+    from .cpu_nms import cpu_nms
+except ImportError:
+    cpu_nms = None
+
+try:
+    from .gpu_nms import gpu_nms
+except ImportError:
+    gpu_nms = None
 
 
 def py_nms_wrapper(thresh):
@@ -22,12 +29,20 @@ def py_nms_wrapper(thresh):
 
 def cpu_nms_wrapper(thresh):
     def _nms(dets):
+        # Fall back to pure-python NMS when Cython extension is unavailable.
+        if cpu_nms is None:
+            return nms(dets, thresh)
         return cpu_nms(dets, thresh)
     return _nms
 
 
 def gpu_nms_wrapper(thresh, device_id):
     def _nms(dets):
+        # Fall back to CPU/Python NMS when CUDA extension is unavailable.
+        if gpu_nms is None:
+            if cpu_nms is not None:
+                return cpu_nms(dets, thresh)
+            return nms(dets, thresh)
         return gpu_nms(dets, thresh, device_id)
     return _nms
 
