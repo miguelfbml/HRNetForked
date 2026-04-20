@@ -13,11 +13,5 @@ python tools/train_mpi_inf_3dhp.py \
   --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
   --use-wandb \
   --wandb-project HRNet_MPI_INF_3DHP \
-  --wandb-run-name hrnet_w48_mpi_inf_3dhp \
-  MODEL.PRETRAINED '' \
-  DATASET.TRAIN_ANNOTATION_FILE ../motion3d/data_train_3dhp.npz \
-  DATASET.TEST_ANNOTATION_FILE ../motion3d/data_test_3dhp.npz \
-  DATASET.TRAIN_IMAGE_ROOT /nas-ctm01/datasets/public/mpi_inf_3dhp \
-  DATASET.TEST_IMAGE_ROOT /nas-ctm01/datasets/public/mpi_inf_3dhp/mpi_inf_3dhp_test_set \
-  WORKERS 8 
+  --wandb-run-name hrnet_w48_mpi_inf_3dhp
 
