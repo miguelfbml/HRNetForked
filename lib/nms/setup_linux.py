@@ -45,9 +45,19 @@ def locate_cuda():
                 'located in your $PATH. Either add it to your path, or set $CUDAHOME')
         home = os.path.dirname(os.path.dirname(nvcc))
 
-    cudaconfig = {'home':home, 'nvcc':nvcc,
-                  'include': pjoin(home, 'include'),
-                  'lib64': pjoin(home, 'lib64')}
+    lib64_path = pjoin(home, 'lib64')
+    # Conda CUDA toolkits often install libraries under lib/ instead of lib64/
+    if not os.path.exists(lib64_path):
+        alt_lib_path = pjoin(home, 'lib')
+        if os.path.exists(alt_lib_path):
+            lib64_path = alt_lib_path
+
+    cudaconfig = {
+        'home': home,
+        'nvcc': nvcc,
+        'include': pjoin(home, 'include'),
+        'lib64': lib64_path,
+    }
     for k, v in cudaconfig.items():
         if not os.path.exists(v):
             raise EnvironmentError('The CUDA %s path could not be located in %s' % (k, v))
@@ -124,7 +134,7 @@ ext_modules = [
         # we're only going to use certain compiler args with nvcc and not with
         # gcc the implementation of this trick is in customize_compiler() below
         extra_compile_args={'gcc': ["-Wno-unused-function"],
-                            'nvcc': ['-arch=sm_35',
+                    'nvcc': ['-arch={}'.format(os.environ.get('NVCC_ARCH', 'sm_70')),
                                      '--ptxas-options=-v',
                                      '-c',
                                      '--compiler-options',
