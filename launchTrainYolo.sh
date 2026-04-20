@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --partition=debug_8gb   # Reserved partition
-#SBATCH --qos=debug_8gb
+#SBATCH --partition=gpu_min32gb   # Reserved partition
+#SBATCH --qos=gpu_min32gb
 #SBATCH --job-name=Yolo26Train_Enhanced
 #SBATCH --output=slurm_%x.%j.out
 #SBATCH --error=slurm_%x.%j.err
