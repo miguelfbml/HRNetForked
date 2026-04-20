@@ -134,14 +134,17 @@ ext_modules = [
         # we're only going to use certain compiler args with nvcc and not with
         # gcc the implementation of this trick is in customize_compiler() below
         extra_compile_args={'gcc': ["-Wno-unused-function"],
-                            'nvcc': ([
+                            'nvcc': (([
                                 '-arch={}'.format(os.environ.get('NVCC_ARCH', 'sm_70')),
                                 '--ptxas-options=-v',
                                 '-c',
                                 '--compiler-options=-fPIC'
-                            ] + (['-allow-unsupported-compiler', '--allow-unsupported-compiler']
+                            ] + (['-allow-unsupported-compiler']
                                  if os.environ.get('NVCC_ALLOW_UNSUPPORTED', '1').lower() in ('1', 'true', 'yes')
-                                 else []))},
+                                 else []))
+                                 + (['--compiler-bindir', os.environ['NVCC_CCBIN']]
+                                    if os.environ.get('NVCC_CCBIN')
+                                    else []))},
         include_dirs = [numpy_include, CUDA['include']]
     ),
 ]
