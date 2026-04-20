@@ -138,10 +138,9 @@ ext_modules = [
                                 '-arch={}'.format(os.environ.get('NVCC_ARCH', 'sm_70')),
                                 '--ptxas-options=-v',
                                 '-c',
-                                '--compiler-options',
-                                "'-fPIC'"
-                            ] + (['-allow-unsupported-compiler']
-                                 if os.environ.get('NVCC_ALLOW_UNSUPPORTED', '1') == '1'
+                                '--compiler-options=-fPIC'
+                            ] + (['-allow-unsupported-compiler', '--allow-unsupported-compiler']
+                                 if os.environ.get('NVCC_ALLOW_UNSUPPORTED', '1').lower() in ('1', 'true', 'yes')
                                  else []))},
         include_dirs = [numpy_include, CUDA['include']]
     ),
