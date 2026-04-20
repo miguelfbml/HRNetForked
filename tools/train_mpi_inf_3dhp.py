@@ -181,8 +181,6 @@ def main():
     )
 
     for epoch in range(begin_epoch, cfg.TRAIN.END_EPOCH):
-        lr_scheduler.step()
-
         train(
             cfg,
             train_loader,
@@ -236,6 +234,8 @@ def main():
             best_model,
             final_output_dir,
         )
+
+        lr_scheduler.step()
 
     final_model_state_file = os.path.join(final_output_dir, 'final_state.pth')
     logger.info('=> saving final model state to {}'.format(final_model_state_file))

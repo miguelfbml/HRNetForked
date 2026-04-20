@@ -39,11 +39,23 @@ class MPIINF3DHPDataset(JointsDataset):
             else os.path.join(self.train_image_root, 'mpi_inf_3dhp_test_set')
         )
 
+        self.train_frame_stride = max(1, int(os.environ.get('MPI3DHP_TRAIN_FRAME_STRIDE', '1')))
+        self.test_frame_stride = max(1, int(os.environ.get('MPI3DHP_TEST_FRAME_STRIDE', '1')))
+        self.max_train_samples = max(0, int(os.environ.get('MPI3DHP_MAX_TRAIN_SAMPLES', '0')))
+        self.max_test_samples = max(0, int(os.environ.get('MPI3DHP_MAX_TEST_SAMPLES', '0')))
+
         self.db = self._get_db()
 
         if is_train and cfg.DATASET.SELECT_DATA:
             self.db = self.select_data(self.db)
 
+        logger.info(
+            '=> mpi_inf_3dhp sampling: train_stride=%d test_stride=%d max_train=%d max_test=%d',
+            self.train_frame_stride,
+            self.test_frame_stride,
+            self.max_train_samples,
+            self.max_test_samples,
+        )
         logger.info('=> load {} samples'.format(len(self.db)))
 
     def _resolve_file(self, path_value):
@@ -115,7 +127,7 @@ class MPIINF3DHPDataset(JointsDataset):
                     continue
 
                 max_frames = min(len(image_files), len(poses_2d))
-                for frame_idx in range(max_frames):
+                for frame_idx in range(0, max_frames, self.train_frame_stride):
                     joints_xy = poses_2d[frame_idx].astype(np.float32)
                     if joints_xy.shape[0] != self.num_joints:
                         continue
@@ -140,6 +152,10 @@ class MPIINF3DHPDataset(JointsDataset):
                             'score': 1.0,
                         }
                     )
+
+                    if self.max_train_samples > 0 and len(db) >= self.max_train_samples:
+                        logger.info('=> reached MPI3DHP_MAX_TRAIN_SAMPLES=%d', self.max_train_samples)
+                        return db
 
         return db
 
@@ -169,7 +185,7 @@ class MPIINF3DHPDataset(JointsDataset):
             poses_2d = seq_data['data_2d']
             max_frames = min(len(image_files), len(poses_2d))
 
-            for frame_idx in range(max_frames):
+            for frame_idx in range(0, max_frames, self.test_frame_stride):
                 joints_xy = poses_2d[frame_idx].astype(np.float32)
                 if joints_xy.shape[0] != self.num_joints:
                     continue
@@ -194,6 +210,10 @@ class MPIINF3DHPDataset(JointsDataset):
                         'score': 1.0,
                     }
                 )
+
+                if self.max_test_samples > 0 and len(db) >= self.max_test_samples:
+                    logger.info('=> reached MPI3DHP_MAX_TEST_SAMPLES=%d', self.max_test_samples)
+                    return db
 
         return db
 
