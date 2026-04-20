@@ -313,6 +313,58 @@ class MPIDatasetConverter:
 
         return f"0 {center_x:.6f} {center_y:.6f} {bbox_width:.6f} {bbox_height:.6f}{keypoint_str}"
 
+    def summarize_training_camera_coverage(self, annotations):
+        total_sequences = 0
+        total_camera_streams = 0
+        camera_streams_with_folders = 0
+        missing_streams = []
+
+        def resolve_camera_folder(subject, sequence, cam_key):
+            candidates = [
+                os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{cam_key}'),
+                os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{int(cam_key)}') if str(cam_key).isdigit() else None,
+                os.path.join(self.base_path, subject, sequence, 'imageFrames', f'video_{int(cam_key):02d}') if str(cam_key).isdigit() else None,
+            ]
+            for candidate in candidates:
+                if candidate and os.path.exists(candidate):
+                    return candidate
+            return None
+
+        for seq_name, seq_data in annotations.items():
+            if not isinstance(seq_data, list) or len(seq_data) < 1:
+                continue
+
+            parts = seq_name.split(' ')
+            if len(parts) != 2:
+                continue
+            subject, sequence = parts
+            camera_dict = seq_data[0]
+
+            camera_keys = sorted(
+                [k for k in camera_dict.keys() if isinstance(camera_dict[k], dict) and 'data_2d' in camera_dict[k]],
+                key=lambda x: int(x) if str(x).isdigit() else str(x)
+            )
+
+            total_sequences += 1
+            total_camera_streams += len(camera_keys)
+
+            for cam_key in camera_keys:
+                folder = resolve_camera_folder(subject, sequence, cam_key)
+                if folder is None:
+                    missing_streams.append(f"{subject} {sequence} cam {cam_key}")
+                else:
+                    camera_streams_with_folders += 1
+
+        print("\nTraining camera pre-check:")
+        print(f"  Sequences in annotations: {total_sequences}")
+        print(f"  Camera streams in annotations: {total_camera_streams}")
+        print(f"  Camera streams with image folders found: {camera_streams_with_folders}")
+        print(f"  Camera streams missing folders: {total_camera_streams - camera_streams_with_folders}")
+        if missing_streams:
+            print("  First missing streams:")
+            for entry in missing_streams[:10]:
+                print(f"    - {entry}")
+
     def process_training_data(self, annotations):
         print("\nProcessing training data...")
         processed_count = 0
@@ -512,6 +564,7 @@ class MPIDatasetConverter:
 
         train_annotations = self.load_annotations()
         test_annotations = self.load_test_annotations()
+        self.summarize_training_camera_coverage(train_annotations)
         self.process_training_data(train_annotations)
         self.process_test_data(test_annotations)
         return self.create_dataset_yaml()
