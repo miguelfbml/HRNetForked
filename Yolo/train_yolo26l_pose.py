@@ -347,6 +347,11 @@ class MPIDatasetConverter:
                 key=lambda x: int(x) if str(x).isdigit() else str(x)
             )
             total_camera_entries += len(camera_keys)
+            expected_cams_str = ','.join(str(c) for c in camera_keys)
+
+            seq_found_cams = []
+            seq_missing_cams = []
+            seq_frame_counts = {}
 
             for cam_key in camera_keys:
                 camera_data = camera_dict[cam_key]
@@ -354,6 +359,7 @@ class MPIDatasetConverter:
                 image_folder = resolve_camera_folder(subject, sequence, cam_key)
                 if image_folder is None:
                     missing_camera_folders += 1
+                    seq_missing_cams.append(str(cam_key))
                     if missing_camera_folders <= 10:
                         print(f"Warning: Missing image folder for {subject} {sequence} cam {cam_key}")
                     continue
@@ -362,11 +368,14 @@ class MPIDatasetConverter:
                 image_files.extend(glob.glob(os.path.join(image_folder, "*.JPG")))
                 image_files.sort()
                 if not image_files:
+                    seq_missing_cams.append(str(cam_key))
                     continue
 
                 camera_entries_with_images += 1
+                seq_found_cams.append(str(cam_key))
 
                 max_frames = min(len(image_files), len(poses_2d))
+                seq_frame_counts[str(cam_key)] = int(max_frames)
                 for frame_idx in range(max_frames):
                     try:
                         img_path = image_files[frame_idx]
@@ -396,6 +405,15 @@ class MPIDatasetConverter:
                         processed_count += 1
                     except Exception:
                         skipped_count += 1
+
+            found_cams_str = ','.join(seq_found_cams) if seq_found_cams else '-'
+            missing_cams_str = ','.join(sorted(set(seq_missing_cams), key=lambda x: int(x) if x.isdigit() else x)) if seq_missing_cams else '-'
+            frame_counts_str = ', '.join([f"cam{cam}:{seq_frame_counts[cam]}" for cam in sorted(seq_frame_counts.keys(), key=lambda x: int(x) if x.isdigit() else x)]) if seq_frame_counts else '-'
+            print(
+                f"[SEQ] {subject} {sequence} | expected cams: [{expected_cams_str}] | "
+                f"found cams: [{found_cams_str}] | missing cams: [{missing_cams_str}] | "
+                f"frames: {frame_counts_str}"
+            )
 
         print(f"Training split: wrote {processed_count} samples, skipped {skipped_count}")
         print(
