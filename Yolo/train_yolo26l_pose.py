@@ -574,19 +574,23 @@ def train_yolo26l_pose(dataset_yaml, args):
     print("\n==============================")
     print("STARTING YOLO26l-pose TRAINING (from scratch)")
     print("==============================")
+    effective_device = str(args.device).strip()
+    if effective_device.lower() != "cpu" and not torch.cuda.is_available():
+        print(f"CUDA is not available; falling back from device={effective_device} to cpu")
+        effective_device = "cpu"
     metrics_tracker = YOLOMetricsTracker(
         use_wandb=args.use_wandb,
         wandb_project=getattr(args, 'wandb_project', 'YOLO26l_MPI_3DHP_Training')
     )
     metrics_tracker.start_training()
     model = YOLO('yolo26l-pose.yaml')
-    print(f"Training config: epochs={args.epochs}, batch={args.batch_size}, imgsz={args.img_size}, device={args.device}")
+    print(f"Training config: epochs={args.epochs}, batch={args.batch_size}, imgsz={args.img_size}, device={effective_device}")
     training_config = {
         'data': dataset_yaml,
         'epochs': args.epochs,
         'imgsz': args.img_size,
         'batch': args.batch_size,
-        'device': args.device,
+        'device': effective_device,
         'workers': args.workers,
         'project': 'runs/pose',
         'name': 'mpi_yolo26l_pose_scratch',
@@ -602,7 +606,7 @@ def train_yolo26l_pose(dataset_yaml, args):
             "batch_size": args.batch_size,
             "img_size": args.img_size,
             "pose_loss_weight": 17.0,
-            "device": args.device,
+            "device": effective_device,
             "dataset": "MPI-INF-3DHP",
             "keypoints": 17,
             "cache": args.cache,
