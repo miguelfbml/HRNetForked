@@ -195,6 +195,127 @@ def compute_compare_metrics(gt_poses_2d, pred_poses_2d, fixed_pck_threshold=150.
     }
 
 
+def extract_sequence_name(db_rec):
+    filename = str(db_rec.get('filename', ''))
+    if '_frame' in filename:
+        return filename.split('_frame')[0]
+
+    image_path = str(db_rec.get('image', ''))
+    normalized = image_path.replace('\\', '/')
+    parts = [p for p in normalized.split('/') if p]
+    for part in parts:
+        if part.upper().startswith('TS') and part[2:].isdigit():
+            return part
+
+    return 'UNKNOWN'
+
+
+def print_sequence_results(logger, metrics):
+    if not metrics:
+        return
+
+    logger.info('')
+    logger.info('Results for %s:', metrics['sequence'])
+    logger.info('  MPJPE: %.2f pixels', metrics['avg_mpjpe'])
+    logger.info('  AUC: %.4f', metrics['auc'])
+    logger.info('  Valid frames: %d/%d', metrics['valid_frames'], metrics['total_frames'])
+    logger.info('  FPS: %.2f', metrics['performance']['fps'])
+    logger.info('  Mean inference time: %.2f ms', metrics['performance']['mean_inference_time'] * 1000.0)
+    logger.info('  PCK metrics:')
+    for key, value in metrics['pck_results'].items():
+        logger.info('    %s: %.2f%%', key, value * 100.0)
+
+
+def print_summary_results(logger, all_metrics, model_name):
+    if not all_metrics:
+        logger.info('No results to summarize.')
+        return
+
+    valid_metrics = [m for m in all_metrics if m is not None]
+    if not valid_metrics:
+        logger.info('No valid metrics found.')
+        return
+
+    logger.info('')
+    logger.info('================================================================================')
+    logger.info('COMPREHENSIVE SUMMARY - HRNet vs Ground Truth (2D)')
+    logger.info('Model: %s', model_name)
+    logger.info('================================================================================')
+
+    total_mpjpe_sum = 0.0
+    total_weighted_frames = 0
+    for metric in valid_metrics:
+        weight = metric['valid_frames']
+        total_mpjpe_sum += metric['avg_mpjpe'] * weight
+        total_weighted_frames += weight
+
+    overall_mpjpe = total_mpjpe_sum / total_weighted_frames if total_weighted_frames > 0 else 0.0
+
+    avg_mpjpe = float(np.mean([m['avg_mpjpe'] for m in valid_metrics]))
+    avg_auc = float(np.mean([m['auc'] for m in valid_metrics]))
+    total_valid_frames = int(sum([m['valid_frames'] for m in valid_metrics]))
+    total_frames = int(sum([m['total_frames'] for m in valid_metrics]))
+
+    total_inference_time = float(sum([m['performance']['total_inference_time'] for m in valid_metrics]))
+    total_processed_frames = int(sum([m['performance']['processed_frames'] for m in valid_metrics]))
+
+    weighted_fps_sum = 0.0
+    weighted_inference_time_sum = 0.0
+    total_weight = 0
+    for metric in valid_metrics:
+        weight = metric['performance']['processed_frames']
+        weighted_fps_sum += metric['performance']['fps'] * weight
+        weighted_inference_time_sum += metric['performance']['mean_inference_time'] * weight
+        total_weight += weight
+
+    overall_fps = weighted_fps_sum / total_weight if total_weight > 0 else 0.0
+    overall_mean_inference_time = weighted_inference_time_sum / total_weight if total_weight > 0 else 0.0
+
+    logger.info('')
+    logger.info('OVERALL METRICS:')
+    logger.info('  Sequences processed: %d', len(valid_metrics))
+    logger.info('  Total valid frames: %d/%d', total_valid_frames, total_frames)
+    logger.info('  Overall MPJPE (weighted): %.2f pixels', overall_mpjpe)
+    logger.info('  Average MPJPE (per sequence): %.2f pixels', avg_mpjpe)
+    logger.info('  Average AUC: %.4f', avg_auc)
+
+    logger.info('')
+    logger.info('PERFORMACE METRICS:')
+    logger.info('  Total inference time: %.2f seconds', total_inference_time)
+    logger.info('  Total processed frames: %d', total_processed_frames)
+    logger.info('  Overall FPS (weighted): %.2f', overall_fps)
+    logger.info('  Overall mean inference time: %.2f ms', overall_mean_inference_time * 1000.0)
+
+    pck_keys = valid_metrics[0]['pck_results'].keys()
+    logger.info('')
+    logger.info('PCK METRICS (averaged across sequences):')
+    for key in pck_keys:
+        avg_pck = float(np.mean([m['pck_results'][key] for m in valid_metrics]))
+        logger.info('  %s: %.2f%%', key, avg_pck * 100.0)
+
+    logger.info('')
+    logger.info('PER-SEQUENCE BREAKDOWN:')
+    logger.info('%-10s %-12s %-10s %-10s %-12s %-12s',
+                'Sequence', 'MPJPE', 'AUC', 'FPS', 'Time(ms)', 'Valid/Total')
+    logger.info('%s', '-' * 70)
+
+    for metric in valid_metrics:
+        logger.info('%-10s %-12.2f %-10.4f %-10.2f %-12.2f %d/%d',
+                    metric['sequence'],
+                    metric['avg_mpjpe'],
+                    metric['auc'],
+                    metric['performance']['fps'],
+                    metric['performance']['mean_inference_time'] * 1000.0,
+                    metric['valid_frames'],
+                    metric['total_frames'])
+
+    logger.info('================================================================================')
+    logger.info('FINAL OVERALL MPJPE: %.2f pixels', overall_mpjpe)
+    logger.info('FINAL OVERALL FPS: %.2f', overall_fps)
+    logger.info('FINAL MEAN INFERENCE TIME: %.2f ms', overall_mean_inference_time * 1000.0)
+    logger.info('================================================================================')
+
+
 def main():
     args = parse_args()
     update_config(cfg, args)
@@ -243,6 +364,8 @@ def main():
     all_preds = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS, 2), dtype=np.float32)
     all_gts = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS, 2), dtype=np.float32)
     all_vis = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS), dtype=np.float32)
+    all_sequence_names = ['UNKNOWN'] * num_samples
+    all_inference_times = np.zeros((num_samples,), dtype=np.float32)
 
     idx = 0
     total_inference_time = 0.0
@@ -277,7 +400,9 @@ def main():
 
                 output = (output + output_flipped) * 0.5
 
-            total_inference_time += (time.perf_counter() - start_time)
+            batch_inference_time = time.perf_counter() - start_time
+            total_inference_time += batch_inference_time
+            per_sample_time = batch_inference_time / max(1, batch_size)
 
             c = meta['center'].numpy()
             s = meta['scale'].numpy()
@@ -289,6 +414,8 @@ def main():
                 db_rec = valid_dataset.db[idx + j]
                 all_gts[idx + j, :, :] = db_rec['joints_3d'][:, 0:2]
                 all_vis[idx + j, :] = db_rec['joints_3d_vis'][:, 0]
+                all_sequence_names[idx + j] = extract_sequence_name(db_rec)
+                all_inference_times[idx + j] = per_sample_time
 
             idx += batch_size
 
@@ -298,6 +425,8 @@ def main():
     all_preds = all_preds[:idx]
     all_gts = all_gts[:idx]
     all_vis = all_vis[:idx]
+    all_sequence_names = all_sequence_names[:idx]
+    all_inference_times = all_inference_times[:idx]
 
     all_preds_root = make_root_relative_2d_pixel(all_preds, root_joint_idx=args.root_joint_idx)
     all_gts_root = make_root_relative_2d_pixel(all_gts, root_joint_idx=args.root_joint_idx)
@@ -306,7 +435,7 @@ def main():
     all_preds_root[invisible_mask] = 0.0
     all_gts_root[invisible_mask] = 0.0
 
-    metrics = compute_compare_metrics(
+    overall_metrics = compute_compare_metrics(
         all_gts_root,
         all_preds_root,
         fixed_pck_threshold=args.fixed_pck_threshold,
@@ -314,37 +443,78 @@ def main():
         auc_num_thresholds=args.auc_num_thresholds,
     )
 
-    if metrics is None:
+    if overall_metrics is None:
         logger.error('No valid frames found for metric computation.')
         return
 
     mean_inference_time = total_inference_time / max(1, idx)
     fps = idx / total_inference_time if total_inference_time > 0 else 0.0
 
-    metrics['performance'] = {
+    overall_metrics['performance'] = {
         'total_inference_time': float(total_inference_time),
         'mean_inference_time': float(mean_inference_time),
         'fps': float(fps),
         'processed_frames': int(idx),
     }
 
+    per_sequence_metrics = []
+    for sequence_name in sorted(set(all_sequence_names)):
+        sequence_indices = [i for i, seq in enumerate(all_sequence_names) if seq == sequence_name]
+        if not sequence_indices:
+            continue
+
+        seq_preds = all_preds_root[sequence_indices]
+        seq_gts = all_gts_root[sequence_indices]
+        seq_times = all_inference_times[sequence_indices]
+
+        seq_metrics = compute_compare_metrics(
+            seq_gts,
+            seq_preds,
+            fixed_pck_threshold=args.fixed_pck_threshold,
+            auc_max_threshold=args.auc_max_threshold,
+            auc_num_thresholds=args.auc_num_thresholds,
+        )
+        if seq_metrics is None:
+            continue
+
+        seq_mean_time = float(np.mean(seq_times)) if len(seq_times) > 0 else 0.0
+        seq_fps = float(1.0 / seq_mean_time) if seq_mean_time > 0 else 0.0
+
+        seq_metrics['sequence'] = sequence_name
+        seq_metrics['performance'] = {
+            'total_inference_time': float(np.sum(seq_times)),
+            'mean_inference_time': seq_mean_time,
+            'fps': seq_fps,
+            'processed_frames': int(len(seq_times)),
+        }
+        per_sequence_metrics.append(seq_metrics)
+
+    for seq_metric in per_sequence_metrics:
+        print_sequence_results(logger, seq_metric)
+
+    model_name = os.path.basename(cfg.TEST.MODEL_FILE) if cfg.TEST.MODEL_FILE else 'final_state.pth'
+    print_summary_results(logger, per_sequence_metrics, model_name)
+
     logger.info('============================================================')
     logger.info('HRNet vs Ground Truth (2D Root-Relative Pixel Metrics)')
-    logger.info('Valid frames: %d/%d', metrics['valid_frames'], metrics['total_frames'])
-    logger.info('Average MPJPE: %.4f px', metrics['avg_mpjpe'])
-    logger.info('AUC: %.6f', metrics['auc'])
-    for key, value in metrics['pck_results'].items():
+    logger.info('Valid frames: %d/%d', overall_metrics['valid_frames'], overall_metrics['total_frames'])
+    logger.info('Average MPJPE: %.4f px', overall_metrics['avg_mpjpe'])
+    logger.info('AUC: %.6f', overall_metrics['auc'])
+    for key, value in overall_metrics['pck_results'].items():
         logger.info('%s: %.2f%%', key, value * 100.0)
 
-    logger.info('Total inference time: %.4f s', metrics['performance']['total_inference_time'])
-    logger.info('Mean inference time: %.4f ms', metrics['performance']['mean_inference_time'] * 1000.0)
-    logger.info('FPS: %.2f', metrics['performance']['fps'])
+    logger.info('Total inference time: %.4f s', overall_metrics['performance']['total_inference_time'])
+    logger.info('Mean inference time: %.4f ms', overall_metrics['performance']['mean_inference_time'] * 1000.0)
+    logger.info('FPS: %.2f', overall_metrics['performance']['fps'])
     logger.info('============================================================')
 
     if args.save_json:
         out_path = os.path.join(final_output_dir, 'compare_metrics.json')
         with open(out_path, 'w') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump({
+                'overall': overall_metrics,
+                'per_sequence': per_sequence_metrics,
+            }, f, indent=2)
         logger.info('Saved metrics JSON: %s', out_path)
 
 

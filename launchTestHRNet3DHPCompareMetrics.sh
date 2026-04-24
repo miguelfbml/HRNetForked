@@ -5,8 +5,6 @@
 #SBATCH --output=slurm_%x.%j.out
 #SBATCH --error=slurm_%x.%j.err
 
-set -euo pipefail
-
 echo "Starting HRNet MPI-INF-3DHP test with compare metrics (MPJPE/PCK/AUC)"
 
 # Keep sampling profile consistent with your training/test setup.
