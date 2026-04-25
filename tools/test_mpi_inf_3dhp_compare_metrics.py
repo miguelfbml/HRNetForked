@@ -12,6 +12,7 @@ import os
 import pprint
 import time
 
+import cv2
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -29,6 +30,12 @@ from utils.utils import create_logger
 
 import dataset
 import models
+
+
+CONNECTIONS_2D = [
+    (0, 16), (16, 1), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7),
+    (1, 15), (15, 14), (14, 8), (8, 9), (9, 10), (14, 11), (11, 12), (12, 13),
+]
 
 
 def parse_args():
@@ -58,6 +65,16 @@ def parse_args():
                         help='Root joint index for root-relative evaluation')
     parser.add_argument('--save-json', action='store_true',
                         help='Save metrics JSON in final output dir')
+    parser.add_argument('--save-video', action='store_true',
+                        help='Save side-by-side GT vs HRNet keypoint video')
+    parser.add_argument('--video-sequence', type=str, default='',
+                        help='Sequence name for video export (e.g., TS1). Defaults to first available sequence')
+    parser.add_argument('--video-num-frames', type=int, default=300,
+                        help='Maximum number of frames to export in video')
+    parser.add_argument('--video-fps', type=float, default=8.0,
+                        help='Output video FPS')
+    parser.add_argument('--video-output-dir', type=str, default='',
+                        help='Directory to save generated video (default: final output dir)')
 
     return parser.parse_args()
 
@@ -316,6 +333,98 @@ def print_summary_results(logger, all_metrics, model_name):
     logger.info('================================================================================')
 
 
+def draw_pose(image, joints, visibility, line_color, point_color):
+    for j1, j2 in CONNECTIONS_2D:
+        if not (visibility[j1] and visibility[j2]):
+            continue
+        p1 = joints[j1]
+        p2 = joints[j2]
+        if np.allclose(p1, 0.0) or np.allclose(p2, 0.0):
+            continue
+        cv2.line(
+            image,
+            (int(round(p1[0])), int(round(p1[1]))),
+            (int(round(p2[0])), int(round(p2[1]))),
+            line_color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    for joint_idx, joint_xy in enumerate(joints):
+        if not visibility[joint_idx]:
+            continue
+        if np.allclose(joint_xy, 0.0):
+            continue
+        cv2.circle(
+            image,
+            (int(round(joint_xy[0])), int(round(joint_xy[1]))),
+            4,
+            point_color,
+            -1,
+            cv2.LINE_AA,
+        )
+
+
+def save_keypoint_comparison_video(logger, output_path, sequence_name, sample_indices, image_paths,
+                                   all_gts, all_preds, all_vis, frame_mpjpe, fps, max_frames):
+    if not sample_indices:
+        logger.warning('No indices found for sequence %s. Video was not created.', sequence_name)
+        return
+
+    if max_frames is not None and max_frames > 0:
+        sample_indices = sample_indices[:max_frames]
+
+    writer = None
+    exported = 0
+
+    for local_idx, global_idx in enumerate(sample_indices):
+        image_path = image_paths[global_idx]
+        frame = cv2.imread(image_path)
+        if frame is None:
+            logger.warning('Could not read image for video: %s', image_path)
+            continue
+
+        gt_frame = frame.copy()
+        pred_frame = frame.copy()
+
+        visibility = all_vis[global_idx] > 0
+        draw_pose(gt_frame, all_gts[global_idx], visibility, line_color=(255, 140, 0), point_color=(255, 80, 0))
+        draw_pose(pred_frame, all_preds[global_idx], visibility, line_color=(0, 180, 255), point_color=(0, 255, 255))
+
+        cv2.putText(gt_frame, 'Ground Truth', (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(pred_frame, 'HRNet Prediction', (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+
+        frame_err = float('nan')
+        if local_idx < len(frame_mpjpe):
+            frame_err = frame_mpjpe[local_idx]
+        mpjpe_text = 'Frame MPJPE: N/A' if np.isnan(frame_err) else 'Frame MPJPE: {:.2f}px'.format(frame_err)
+        cv2.putText(pred_frame, mpjpe_text, (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+
+        side_by_side = np.concatenate([gt_frame, pred_frame], axis=1)
+
+        if writer is None:
+            h, w = side_by_side.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+            if not writer.isOpened():
+                logger.error('Failed to open video writer: %s', output_path)
+                return
+
+        writer.write(side_by_side)
+        exported += 1
+
+    if writer is not None:
+        writer.release()
+
+    if exported == 0:
+        logger.warning('No frames were exported to video for sequence %s.', sequence_name)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return
+
+    logger.info('Saved video for %s (%d frames): %s', sequence_name, exported, output_path)
+
+
 def main():
     args = parse_args()
     update_config(cfg, args)
@@ -365,6 +474,7 @@ def main():
     all_gts = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS, 2), dtype=np.float32)
     all_vis = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS), dtype=np.float32)
     all_sequence_names = ['UNKNOWN'] * num_samples
+    all_image_paths = [''] * num_samples
     all_inference_times = np.zeros((num_samples,), dtype=np.float32)
 
     idx = 0
@@ -415,6 +525,7 @@ def main():
                 all_gts[idx + j, :, :] = db_rec['joints_3d'][:, 0:2]
                 all_vis[idx + j, :] = db_rec['joints_3d_vis'][:, 0]
                 all_sequence_names[idx + j] = extract_sequence_name(db_rec)
+                all_image_paths[idx + j] = str(db_rec.get('image', ''))
                 all_inference_times[idx + j] = per_sample_time
 
             idx += batch_size
@@ -426,6 +537,7 @@ def main():
     all_gts = all_gts[:idx]
     all_vis = all_vis[:idx]
     all_sequence_names = all_sequence_names[:idx]
+    all_image_paths = all_image_paths[:idx]
     all_inference_times = all_inference_times[:idx]
 
     all_preds_root = make_root_relative_2d_pixel(all_preds, root_joint_idx=args.root_joint_idx)
@@ -458,10 +570,14 @@ def main():
     }
 
     per_sequence_metrics = []
+    sequence_indices_map = {}
+    sequence_frame_mpjpe_map = {}
     for sequence_name in sorted(set(all_sequence_names)):
         sequence_indices = [i for i, seq in enumerate(all_sequence_names) if seq == sequence_name]
         if not sequence_indices:
             continue
+
+        sequence_indices_map[sequence_name] = sequence_indices
 
         seq_preds = all_preds_root[sequence_indices]
         seq_gts = all_gts_root[sequence_indices]
@@ -487,6 +603,7 @@ def main():
             'fps': seq_fps,
             'processed_frames': int(len(seq_times)),
         }
+        sequence_frame_mpjpe_map[sequence_name] = seq_metrics['frame_mpjpe']
         per_sequence_metrics.append(seq_metrics)
 
     for seq_metric in per_sequence_metrics:
@@ -516,6 +633,39 @@ def main():
                 'per_sequence': per_sequence_metrics,
             }, f, indent=2)
         logger.info('Saved metrics JSON: %s', out_path)
+
+    if args.save_video:
+        if not sequence_indices_map:
+            logger.warning('No sequence data available for video export.')
+            return
+
+        target_sequence = args.video_sequence if args.video_sequence else sorted(sequence_indices_map.keys())[0]
+        if target_sequence not in sequence_indices_map:
+            logger.warning('Requested video sequence %s not found. Using %s instead.',
+                           target_sequence, sorted(sequence_indices_map.keys())[0])
+            target_sequence = sorted(sequence_indices_map.keys())[0]
+
+        video_output_dir = args.video_output_dir if args.video_output_dir else final_output_dir
+        os.makedirs(video_output_dir, exist_ok=True)
+
+        model_name = os.path.basename(cfg.TEST.MODEL_FILE) if cfg.TEST.MODEL_FILE else 'final_state.pth'
+        model_stem = os.path.splitext(model_name)[0]
+        video_path = os.path.join(video_output_dir, '{}_hrnet_compare_{}.mp4'.format(target_sequence, model_stem))
+
+        logger.info('Exporting keypoint video for sequence %s ...', target_sequence)
+        save_keypoint_comparison_video(
+            logger=logger,
+            output_path=video_path,
+            sequence_name=target_sequence,
+            sample_indices=sequence_indices_map[target_sequence],
+            image_paths=all_image_paths,
+            all_gts=all_gts,
+            all_preds=all_preds,
+            all_vis=all_vis,
+            frame_mpjpe=sequence_frame_mpjpe_map.get(target_sequence, []),
+            fps=max(1.0, args.video_fps),
+            max_frames=args.video_num_frames,
+        )
 
 
 if __name__ == '__main__':
