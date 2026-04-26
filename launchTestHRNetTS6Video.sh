@@ -25,8 +25,62 @@ python tools/test_mpi_inf_3dhp_compare_metrics.py \
   --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
   --save-json \
   --save-video \
+  --video-sequence TS1 \
+  --video-num-frames 50 \
+  --video-fps 8 \
+  --video-output-dir comparison_output \
+  TEST.MODEL_FILE "${MODEL_FILE}"
+
+
+python tools/test_mpi_inf_3dhp_compare_metrics.py \
+  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
+  --save-json \
+  --save-video \
+  --video-sequence TS2 \
+  --video-num-frames 50 \
+  --video-fps 8 \
+  --video-output-dir comparison_output \
+  TEST.MODEL_FILE "${MODEL_FILE}"
+
+  python tools/test_mpi_inf_3dhp_compare_metrics.py \
+  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
+  --save-json \
+  --save-video \
+  --video-sequence TS3 \
+  --video-num-frames 50 \
+  --video-fps 8 \
+  --video-output-dir comparison_output \
+  TEST.MODEL_FILE "${MODEL_FILE}"
+
+
+  python tools/test_mpi_inf_3dhp_compare_metrics.py \
+  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
+  --save-json \
+  --save-video \
+  --video-sequence TS4 \
+  --video-num-frames 50 \
+  --video-fps 8 \
+  --video-output-dir comparison_output \
+  TEST.MODEL_FILE "${MODEL_FILE}"
+
+
+  python tools/test_mpi_inf_3dhp_compare_metrics.py \
+  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
+  --save-json \
+  --save-video \
+  --video-sequence TS5 \
+  --video-num-frames 50 \
+  --video-fps 8 \
+  --video-output-dir comparison_output \
+  TEST.MODEL_FILE "${MODEL_FILE}"
+
+
+  python tools/test_mpi_inf_3dhp_compare_metrics.py \
+  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
+  --save-json \
+  --save-video \
   --video-sequence TS6 \
-  --video-num-frames 300 \
+  --video-num-frames 50 \
   --video-fps 8 \
   --video-output-dir comparison_output \
   TEST.MODEL_FILE "${MODEL_FILE}"
