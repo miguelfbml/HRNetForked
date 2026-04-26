@@ -24,7 +24,7 @@ MODEL_FILE="output/mpi_inf_3dhp/pose_hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp/
 python tools/test_mpi_inf_3dhp_train_compare_metrics.py \
   --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
   --save-video \
-  --video-sequence S1_Seq2_cam3 \
+  --video-sequence S1_Seq2_cam1 \
   --video-num-frames 300 \
   --video-fps 8 \
   --video-output-dir comparison_output \
