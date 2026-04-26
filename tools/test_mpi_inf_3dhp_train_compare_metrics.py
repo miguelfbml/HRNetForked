@@ -7,6 +7,7 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import glob
 import json
 import os
 import pprint
@@ -25,7 +26,7 @@ import _init_paths
 from config import cfg
 from config import update_config
 from core.inference import get_final_preds
-from utils.transforms import flip_back
+from utils.transforms import flip_back, get_affine_transform
 from utils.utils import create_logger
 
 import dataset
@@ -68,7 +69,7 @@ def parse_args():
     parser.add_argument('--save-video', action='store_true',
                         help='Save side-by-side GT vs HRNet keypoint video')
     parser.add_argument('--video-sequence', type=str, default='',
-                        help='Train stream for video export (e.g., S1_Seq1_cam0). Defaults to first available stream')
+                        help='Train stream for video export (e.g., S1_Seq1_cam0).')
     parser.add_argument('--video-num-frames', type=int, default=300,
                         help='Maximum number of frames to export in video')
     parser.add_argument('--video-fps', type=float, default=8.0,
@@ -428,6 +429,198 @@ def save_keypoint_comparison_video(logger, output_path, stream_name, sample_indi
     logger.info('Saved video for %s (%d frames): %s', stream_name, exported, output_path)
 
 
+def safe_load_checkpoint(path):
+    try:
+        return torch.load(path, map_location='cpu', weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location='cpu')
+
+
+def extract_state_dict(checkpoint):
+    if isinstance(checkpoint, dict):
+        if 'state_dict' in checkpoint and isinstance(checkpoint['state_dict'], dict):
+            return checkpoint['state_dict']
+        if 'model_state_dict' in checkpoint and isinstance(checkpoint['model_state_dict'], dict):
+            return checkpoint['model_state_dict']
+    return checkpoint
+
+
+def parse_train_stream_name(stream_name):
+    if '_cam' not in stream_name:
+        raise ValueError('Invalid stream format: {}. Expected Sx_Seqy_camZ'.format(stream_name))
+
+    stream_part, cam_part = stream_name.rsplit('_cam', 1)
+    pieces = stream_part.split('_', 1)
+    if len(pieces) != 2:
+        raise ValueError('Invalid stream format: {}. Expected Sx_Seqy_camZ'.format(stream_name))
+
+    subject = pieces[0]
+    sequence = pieces[1]
+    camera = cam_part
+    return subject, sequence, camera
+
+
+def resolve_annotation_file(path_value):
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.join(os.getcwd(), path_value)
+
+
+def resolve_train_camera_folder(train_image_root, subject, sequence, camera_key):
+    candidates = [
+        os.path.join(train_image_root, subject, sequence, 'imageFrames', 'video_{}'.format(camera_key)),
+    ]
+    if str(camera_key).isdigit():
+        candidates.append(os.path.join(train_image_root, subject, sequence, 'imageFrames', 'video_{}'.format(int(camera_key))))
+        candidates.append(os.path.join(train_image_root, subject, sequence, 'imageFrames', 'video_{:02d}'.format(int(camera_key))))
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def compute_center_scale(joints_xy, aspect_ratio, pixel_std=200.0):
+    x_min = np.min(joints_xy[:, 0])
+    y_min = np.min(joints_xy[:, 1])
+    x_max = np.max(joints_xy[:, 0])
+    y_max = np.max(joints_xy[:, 1])
+
+    w = x_max - x_min
+    h = y_max - y_min
+    if w < 2 or h < 2:
+        return None, None
+
+    center = np.array([(x_min + x_max) * 0.5, (y_min + y_max) * 0.5], dtype=np.float32)
+
+    if w > aspect_ratio * h:
+        h = w / aspect_ratio
+    elif w < aspect_ratio * h:
+        w = h * aspect_ratio
+
+    scale = np.array([w / pixel_std, h / pixel_std], dtype=np.float32) * 1.25
+    return center, scale
+
+
+def build_train_stream_db(cfg_obj, stream_name):
+    subject, sequence, camera = parse_train_stream_name(stream_name)
+    seq_key = '{} {}'.format(subject, sequence)
+
+    annotation_file = resolve_annotation_file(cfg_obj.DATASET.TRAIN_ANNOTATION_FILE)
+    if not os.path.exists(annotation_file):
+        raise FileNotFoundError('Training annotation file not found: {}'.format(annotation_file))
+
+    annotations = np.load(annotation_file, allow_pickle=True)['data'].item()
+    if seq_key not in annotations:
+        raise KeyError('Sequence not found in train annotations: {}'.format(seq_key))
+
+    seq_data = annotations[seq_key]
+    if not isinstance(seq_data, list) or len(seq_data) < 1:
+        raise ValueError('Unexpected train annotation format for {}'.format(seq_key))
+    camera_dict = seq_data[0]
+
+    cam_candidates = [str(camera)]
+    if str(camera).isdigit():
+        cam_candidates.append(str(int(camera)))
+        cam_candidates.append('{:02d}'.format(int(camera)))
+
+    selected_cam = None
+    for cam_key in cam_candidates:
+        if cam_key in camera_dict and isinstance(camera_dict[cam_key], dict) and 'data_2d' in camera_dict[cam_key]:
+            selected_cam = cam_key
+            break
+    if selected_cam is None:
+        raise KeyError('Camera {} not found in sequence {}'.format(camera, seq_key))
+
+    poses_2d = camera_dict[selected_cam]['data_2d']
+    train_image_root = cfg_obj.DATASET.TRAIN_IMAGE_ROOT if cfg_obj.DATASET.TRAIN_IMAGE_ROOT else cfg_obj.DATASET.ROOT
+    image_folder = resolve_train_camera_folder(train_image_root, subject, sequence, selected_cam)
+    if image_folder is None:
+        raise FileNotFoundError('Image folder not found for {}_{}_cam{}'.format(subject, sequence, selected_cam))
+
+    image_files = glob.glob(os.path.join(image_folder, '*.jpg'))
+    image_files.extend(glob.glob(os.path.join(image_folder, '*.JPG')))
+    image_files.sort()
+    if not image_files:
+        raise FileNotFoundError('No images found in {}'.format(image_folder))
+
+    max_frames = min(len(image_files), len(poses_2d))
+    frame_stride = max(1, int(os.environ.get('MPI3DHP_TRAIN_FRAME_STRIDE', '1')))
+    aspect_ratio = cfg_obj.MODEL.IMAGE_SIZE[0] * 1.0 / cfg_obj.MODEL.IMAGE_SIZE[1]
+
+    db = []
+    for frame_idx in range(0, max_frames, frame_stride):
+        joints_xy = poses_2d[frame_idx].astype(np.float32)
+        if joints_xy.shape[0] != 17:
+            continue
+
+        center, scale = compute_center_scale(joints_xy, aspect_ratio)
+        if center is None:
+            continue
+
+        joints_3d = np.zeros((17, 3), dtype=np.float32)
+        joints_3d_vis = np.ones((17, 3), dtype=np.float32)
+        joints_3d[:, 0:2] = joints_xy[:, 0:2]
+
+        db.append(
+            {
+                'image': image_files[frame_idx],
+                'center': center,
+                'scale': scale,
+                'joints_3d': joints_3d,
+                'joints_3d_vis': joints_3d_vis,
+                'filename': '{}_{}_cam{}_frame{:06d}'.format(subject, sequence, selected_cam, frame_idx),
+                'imgnum': frame_idx,
+                'score': 1.0,
+            }
+        )
+
+    return db
+
+
+class TrainStreamVideoDataset(torch.utils.data.Dataset):
+    def __init__(self, db, cfg_obj, transform=None):
+        self.db = db
+        self.color_rgb = cfg_obj.DATASET.COLOR_RGB
+        self.image_size = np.array(cfg_obj.MODEL.IMAGE_SIZE)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.db)
+
+    def __getitem__(self, idx):
+        db_rec = self.db[idx]
+        image_file = db_rec['image']
+        data_numpy = cv2.imread(image_file, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+
+        if data_numpy is None:
+            raise ValueError('Fail to read {}'.format(image_file))
+
+        if self.color_rgb:
+            data_numpy = cv2.cvtColor(data_numpy, cv2.COLOR_BGR2RGB)
+
+        c = db_rec['center']
+        s = db_rec['scale']
+        trans = get_affine_transform(c, s, 0, self.image_size)
+
+        input_data = cv2.warpAffine(
+            data_numpy,
+            trans,
+            (int(self.image_size[0]), int(self.image_size[1])),
+            flags=cv2.INTER_LINEAR,
+        )
+
+        if self.transform:
+            input_data = self.transform(input_data)
+
+        meta = {
+            'center': c.astype(np.float32),
+            'scale': s.astype(np.float32),
+            'db_index': np.int64(idx),
+        }
+        return input_data, meta
+
+
 def main():
     args = parse_args()
     update_config(cfg, args)
@@ -444,25 +637,164 @@ def main():
 
     if cfg.TEST.MODEL_FILE:
         logger.info('=> loading model from {}'.format(cfg.TEST.MODEL_FILE))
-        model.load_state_dict(torch.load(cfg.TEST.MODEL_FILE), strict=False)
+        model.load_state_dict(extract_state_dict(safe_load_checkpoint(cfg.TEST.MODEL_FILE)), strict=False)
     else:
         model_state_file = os.path.join(final_output_dir, 'final_state.pth')
         logger.info('=> loading model from {}'.format(model_state_file))
-        model.load_state_dict(torch.load(model_state_file))
+        model.load_state_dict(extract_state_dict(safe_load_checkpoint(model_state_file)), strict=False)
 
     model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
     model.eval()
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transform_pipeline = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    if args.save_video:
+        if not args.video_sequence:
+            logger.error('In video mode please provide --video-sequence (e.g., S1_Seq1_cam0).')
+            return
+
+        logger.info('Video mode: loading only stream %s', args.video_sequence)
+        try:
+            stream_db = build_train_stream_db(cfg, args.video_sequence)
+        except Exception as e:
+            logger.error('Failed to load requested stream %s: %s', args.video_sequence, str(e))
+            return
+
+        if not stream_db:
+            logger.error('No frames found for stream %s', args.video_sequence)
+            return
+
+        video_dataset = TrainStreamVideoDataset(stream_db, cfg, transform=transform_pipeline)
+        video_loader = torch.utils.data.DataLoader(
+            video_dataset,
+            batch_size=cfg.TEST.BATCH_SIZE_PER_GPU * len(cfg.GPUS),
+            shuffle=False,
+            num_workers=cfg.WORKERS,
+            pin_memory=True,
+        )
+
+        num_samples = len(video_dataset)
+        all_preds = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS, 2), dtype=np.float32)
+        all_gts = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS, 2), dtype=np.float32)
+        all_vis = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS), dtype=np.float32)
+        all_image_paths = [''] * num_samples
+
+        idx = 0
+        with torch.no_grad():
+            for i, (input_data, meta) in enumerate(video_loader):
+                input_data = input_data.cuda(non_blocking=True)
+                batch_size = input_data.size(0)
+
+                outputs = model(input_data)
+                if isinstance(outputs, list):
+                    output = outputs[-1]
+                else:
+                    output = outputs
+
+                if cfg.TEST.FLIP_TEST:
+                    input_flipped = np.flip(input_data.cpu().numpy(), 3).copy()
+                    input_flipped = torch.from_numpy(input_flipped).cuda()
+                    outputs_flipped = model(input_flipped)
+
+                    if isinstance(outputs_flipped, list):
+                        output_flipped = outputs_flipped[-1]
+                    else:
+                        output_flipped = outputs_flipped
+
+                    output_flipped = flip_back(output_flipped.cpu().numpy(), [[2, 5], [3, 6], [4, 7], [8, 11], [9, 12], [10, 13]])
+                    output_flipped = torch.from_numpy(output_flipped.copy()).cuda()
+
+                    if cfg.TEST.SHIFT_HEATMAP:
+                        output_flipped[:, :, :, 1:] = output_flipped.clone()[:, :, :, 0:-1]
+
+                    output = (output + output_flipped) * 0.5
+
+                c = meta['center'].numpy()
+                s = meta['scale'].numpy()
+                preds, _ = get_final_preds(cfg, output.clone().cpu().numpy(), c, s)
+
+                all_preds[idx:idx + batch_size, :, :] = preds[:, :, 0:2]
+
+                for j in range(batch_size):
+                    db_idx = int(meta['db_index'][j].item())
+                    db_rec = video_dataset.db[db_idx]
+                    all_gts[idx + j, :, :] = db_rec['joints_3d'][:, 0:2]
+                    all_vis[idx + j, :] = db_rec['joints_3d_vis'][:, 0]
+                    all_image_paths[idx + j] = str(db_rec.get('image', ''))
+
+                idx += batch_size
+
+                if i % max(1, cfg.PRINT_FREQ) == 0:
+                    logger.info('Video stream: [{}/{}]'.format(i, len(video_loader)))
+
+        all_preds = all_preds[:idx]
+        all_gts = all_gts[:idx]
+        all_vis = all_vis[:idx]
+        all_image_paths = all_image_paths[:idx]
+
+        all_preds_root = make_root_relative_2d_pixel(all_preds, root_joint_idx=args.root_joint_idx)
+        all_gts_root = make_root_relative_2d_pixel(all_gts, root_joint_idx=args.root_joint_idx)
+
+        invisible_mask = all_vis <= 0
+        all_preds_root[invisible_mask] = 0.0
+        all_gts_root[invisible_mask] = 0.0
+
+        stream_metrics = compute_compare_metrics(
+            all_gts_root,
+            all_preds_root,
+            fixed_pck_threshold=args.fixed_pck_threshold,
+            auc_max_threshold=args.auc_max_threshold,
+            auc_num_thresholds=args.auc_num_thresholds,
+        )
+        frame_mpjpe = stream_metrics['frame_mpjpe'] if stream_metrics is not None else []
+
+        video_output_dir = args.video_output_dir if args.video_output_dir else final_output_dir
+        os.makedirs(video_output_dir, exist_ok=True)
+
+        model_name = os.path.basename(cfg.TEST.MODEL_FILE) if cfg.TEST.MODEL_FILE else 'final_state.pth'
+        model_stem = os.path.splitext(model_name)[0]
+        video_path = os.path.join(video_output_dir, '{}_hrnet_train_compare_{}.mp4'.format(args.video_sequence, model_stem))
+
+        logger.info('Exporting keypoint video for stream %s ...', args.video_sequence)
+        save_keypoint_comparison_video(
+            logger=logger,
+            output_path=video_path,
+            stream_name=args.video_sequence,
+            sample_indices=list(range(idx)),
+            image_paths=all_image_paths,
+            all_gts=all_gts,
+            all_preds=all_preds,
+            all_vis=all_vis,
+            frame_mpjpe=frame_mpjpe,
+            fps=max(1.0, args.video_fps),
+            max_frames=args.video_num_frames,
+        )
+
+        if args.save_json:
+            out_path = os.path.join(final_output_dir, 'compare_train_metrics.json')
+            with open(out_path, 'w') as f:
+                json.dump(
+                    {
+                        'video_stream': args.video_sequence,
+                        'stream_metrics': stream_metrics,
+                    },
+                    f,
+                    indent=2,
+                )
+            logger.info('Saved stream metrics JSON: %s', out_path)
+
+        return
+
     train_dataset = eval('dataset.' + cfg.DATASET.DATASET)(
         cfg,
         cfg.DATASET.ROOT,
         cfg.DATASET.TRAIN_SET,
         True,
-        transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])
+        transform_pipeline,
     )
     train_dataset.is_train = False
 
