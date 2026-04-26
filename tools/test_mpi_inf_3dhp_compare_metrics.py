@@ -544,6 +544,7 @@ class TestSequenceVideoDataset(torch.utils.data.Dataset):
         self.db = db
         self.color_rgb = cfg_obj.DATASET.COLOR_RGB
         self.image_size = np.array(cfg_obj.MODEL.IMAGE_SIZE)
+        self.flip_pairs = [[2, 5], [3, 6], [4, 7], [8, 11], [9, 12], [10, 13]]
         self.transform = transform
 
     def __len__(self):

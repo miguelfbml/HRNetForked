@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=gpu_min11gb
 #SBATCH --qos=gpu_min11gb
-#SBATCH --job-name=HRNet3DHP_TS6_Video
+#SBATCH --job-name=HRNet3DHP_Test_Video
 #SBATCH --output=slurm_%x.%j.out
 #SBATCH --error=slurm_%x.%j.err
 

@@ -40,6 +40,26 @@ except ImportError:
     wandb = None
 
 
+def _extract_mpjpe2d(name_values):
+    if isinstance(name_values, list):
+        for item in name_values:
+            if isinstance(item, dict) and 'MPJPE2D' in item:
+                return float(item['MPJPE2D'])
+    elif isinstance(name_values, dict) and 'MPJPE2D' in name_values:
+        return float(name_values['MPJPE2D'])
+    return None
+
+
+def _extract_pck005(name_values):
+    if isinstance(name_values, list):
+        for item in name_values:
+            if isinstance(item, dict) and 'PCK@0.05' in item:
+                return float(item['PCK@0.05'])
+    elif isinstance(name_values, dict) and 'PCK@0.05' in name_values:
+        return float(name_values['PCK@0.05'])
+    return None
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train HRNet on MPI-INF-3DHP')
     parser.add_argument(
@@ -159,7 +179,7 @@ def main():
         pin_memory=cfg.PIN_MEMORY,
     )
 
-    best_perf = 0.0
+    best_perf = float('inf')
     best_model = False
     last_epoch = -1
     optimizer = get_optimizer(cfg, model)
@@ -170,7 +190,12 @@ def main():
         logger.info("=> loading checkpoint '{}'".format(checkpoint_file))
         checkpoint = torch.load(checkpoint_file)
         begin_epoch = checkpoint['epoch']
-        best_perf = checkpoint['perf']
+        perf_name = checkpoint.get('perf_name', '')
+        if perf_name == 'MPJPE2D':
+            best_perf = checkpoint['perf']
+        else:
+            logger.warning('Checkpoint perf_name is "%s"; resetting best_perf for MPJPE2D selection.', perf_name)
+            best_perf = float('inf')
         last_epoch = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -193,7 +218,7 @@ def main():
             writer_dict,
         )
 
-        perf_indicator = validate(
+        perf_indicator, name_values = validate(
             cfg,
             valid_loader,
             valid_dataset,
@@ -202,10 +227,24 @@ def main():
             final_output_dir,
             tb_log_dir,
             writer_dict,
+            return_metrics=True,
         )
 
-        if perf_indicator >= best_perf:
-            best_perf = perf_indicator
+        mpjpe2d = _extract_mpjpe2d(name_values)
+        pck005 = _extract_pck005(name_values)
+        selection_perf = mpjpe2d if mpjpe2d is not None else perf_indicator
+
+        logger.info(
+            'Epoch %d validation metrics: PCK@0.05=%s MPJPE2D=%s selection(MPJPE2D)=%s best=%s',
+            epoch + 1,
+            '{:.6f}'.format(pck005) if pck005 is not None else 'N/A',
+            '{:.6f}'.format(mpjpe2d) if mpjpe2d is not None else 'N/A',
+            '{:.6f}'.format(selection_perf),
+            '{:.6f}'.format(best_perf),
+        )
+
+        if selection_perf <= best_perf:
+            best_perf = selection_perf
             best_model = True
         else:
             best_model = False
@@ -215,6 +254,7 @@ def main():
                 {
                     'epoch': epoch + 1,
                     'valid/perf_indicator': float(perf_indicator),
+                    'valid/selection_perf_mpjpe2d': float(selection_perf),
                     'valid/best_perf': float(best_perf),
                     'train/lr': float(optimizer.param_groups[0]['lr']),
                 },
@@ -228,7 +268,8 @@ def main():
                 'model': cfg.MODEL.NAME,
                 'state_dict': model.state_dict(),
                 'best_state_dict': model.module.state_dict(),
-                'perf': perf_indicator,
+                'perf': selection_perf,
+                'perf_name': 'MPJPE2D',
                 'optimizer': optimizer.state_dict(),
             },
             best_model,

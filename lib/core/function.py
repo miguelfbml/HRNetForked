@@ -95,7 +95,7 @@ def train(config, train_loader, model, criterion, optimizer, epoch,
 
 
 def validate(config, val_loader, val_dataset, model, criterion, output_dir,
-             tb_log_dir, writer_dict=None):
+             tb_log_dir, writer_dict=None, return_metrics=False):
     batch_time = AverageMeter()
     losses = AverageMeter()
     acc = AverageMeter()
@@ -236,6 +236,9 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir,
                     global_steps
                 )
             writer_dict['valid_global_steps'] = global_steps + 1
+
+    if return_metrics:
+        return perf_indicator, name_values
 
     return perf_indicator
 
