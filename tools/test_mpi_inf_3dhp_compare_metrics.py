@@ -399,7 +399,19 @@ def save_keypoint_comparison_video(logger, output_path, sequence_name, sample_in
         if local_idx < len(frame_mpjpe):
             frame_err = frame_mpjpe[local_idx]
         mpjpe_text = 'Frame MPJPE: N/A' if np.isnan(frame_err) else 'Frame MPJPE: {:.2f}px'.format(frame_err)
-        cv2.putText(pred_frame, mpjpe_text, (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+        text_x, text_y = 20, 70
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
+        (text_w, text_h), baseline = cv2.getTextSize(mpjpe_text, font, font_scale, thickness)
+        cv2.rectangle(
+            pred_frame,
+            (text_x - 6, text_y - text_h - 6),
+            (text_x + text_w + 6, text_y + baseline + 6),
+            (0, 0, 0),
+            -1,
+        )
+        cv2.putText(pred_frame, mpjpe_text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
         side_by_side = np.concatenate([gt_frame, pred_frame], axis=1)
 
