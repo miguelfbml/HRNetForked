@@ -9,6 +9,7 @@ from __future__ import print_function
 import argparse
 import os
 import glob
+import sys
 
 import cv2
 import numpy as np
@@ -16,13 +17,16 @@ import torch
 import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
 
-import _init_paths
-from config import cfg
-from config import update_config
-from core.inference import get_final_preds
-from utils.transforms import flip_back, get_affine_transform
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
-import models
+from lib.config import cfg
+from lib.config import update_config
+from lib.core.inference import get_final_preds
+from lib.utils.transforms import flip_back, get_affine_transform
+
+from lib import models
 
 
 CONNECTIONS_2D = [
@@ -82,9 +86,32 @@ def extract_state_dict(checkpoint):
 
 
 def resolve_annotation_file(path_value):
+    if not path_value:
+        return path_value
     if os.path.isabs(path_value):
         return path_value
-    return os.path.join(os.getcwd(), path_value)
+    return os.path.join(REPO_ROOT, path_value)
+
+
+def resolve_test_annotation_file(path_value):
+    candidates = []
+    candidates.extend([
+        os.path.join(REPO_ROOT, 'motion3d', 'GT', 'data_test_3dhp.npz'),
+    ])
+
+    resolved = resolve_annotation_file(path_value)
+    if resolved:
+        candidates.append(resolved)
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.exists(candidate):
+            return candidate
+
+    return resolved
 
 
 def compute_center_scale(joints_xy, aspect_ratio, pixel_std=200.0):
@@ -117,7 +144,7 @@ def resolve_test_sequence_folder(test_image_root, sequence_name):
 
 
 def build_selected_sequence_db(cfg_obj, sequence_name, frame_indices):
-    annotation_file = resolve_annotation_file(cfg_obj.DATASET.TEST_ANNOTATION_FILE)
+    annotation_file = resolve_test_annotation_file(cfg_obj.DATASET.TEST_ANNOTATION_FILE)
     if not os.path.exists(annotation_file):
         raise FileNotFoundError('Test annotation file not found: {}'.format(annotation_file))
 
