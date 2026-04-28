@@ -21,11 +21,11 @@ echo "Max test samples: ${MPI3DHP_MAX_TEST_SAMPLES} (0 means unlimited)"
 
 
 python tools/train_mpi_inf_3dhp.py \
-  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
-  MODEL.PRETRAINED models/pytorch/pose_coco/pose_hrnet_w48_384x288.pth \
   --modelDir output_pretrained \
   --logDir log_pretrained \
   --use-wandb \
   --wandb-project HRNet_MPI_INF_3DHP \
-  --wandb-run-name hrnet_w48_mpi_inf_3dhp_pretrained_coco
+  --wandb-run-name hrnet_w48_mpi_inf_3dhp_pretrained_coco \
+  --cfg experiments/3DHP/hrnet/w48_384x288_adam_lr1e-3_mpi_inf_3dhp.yaml \
+  MODEL.PRETRAINED models/pytorch/pose_coco/pose_hrnet_w48_384x288.pth
 
