@@ -18,8 +18,11 @@ import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+LIB_ROOT = os.path.join(REPO_ROOT, 'lib')
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+if LIB_ROOT not in sys.path:
+    sys.path.insert(0, LIB_ROOT)
 
 from lib.config import cfg
 from lib.config import update_config
