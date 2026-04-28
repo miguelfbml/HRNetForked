@@ -9,7 +9,6 @@ from __future__ import print_function
 import argparse
 import os
 import glob
-import sys
 
 import cv2
 import numpy as np
@@ -17,19 +16,16 @@ import torch
 import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
 
+import _init_paths
+from config import cfg
+from config import update_config
+from core.inference import get_final_preds
+from utils.transforms import flip_back, get_affine_transform
+
+import models
+
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-LIB_ROOT = os.path.join(REPO_ROOT, 'lib')
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-if LIB_ROOT not in sys.path:
-    sys.path.insert(0, LIB_ROOT)
-
-from lib.config import cfg
-from lib.config import update_config
-from lib.core.inference import get_final_preds
-from lib.utils.transforms import flip_back, get_affine_transform
-
-from lib import models
 
 
 CONNECTIONS_2D = [
