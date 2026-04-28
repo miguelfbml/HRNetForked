@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=gpu_min32gb     # Reserved partition
 #SBATCH --qos=gpu_min32gb
-#SBATCH --job-name=HRNet3DHP_Train
+#SBATCH --job-name=HRNet3DHP_Train_Pretrained
 #SBATCH --output=slurm_%x.%j.out
 #SBATCH --error=slurm_%x.%j.err
 
