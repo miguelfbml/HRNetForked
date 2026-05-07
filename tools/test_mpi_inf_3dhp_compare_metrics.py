@@ -656,6 +656,7 @@ def main():
         all_gts = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS, 2), dtype=np.float32)
         all_vis = np.zeros((num_samples, cfg.MODEL.NUM_JOINTS), dtype=np.float32)
         all_image_paths = [''] * num_samples
+        all_missing_predictions = np.zeros((num_samples,), dtype=bool)
 
         idx = 0
         with torch.no_grad():
@@ -689,9 +690,11 @@ def main():
 
                 c = meta['center'].numpy()
                 s = meta['scale'].numpy()
-                preds, _ = get_final_preds(cfg, output.clone().cpu().numpy(), c, s)
+                heatmaps = output.clone().cpu().numpy()
+                preds, maxvals = get_final_preds(cfg, heatmaps, c, s)
 
                 all_preds[idx:idx + batch_size, :, :] = preds[:, :, 0:2]
+                all_missing_predictions[idx:idx + batch_size] = np.all(maxvals <= 0.0, axis=(1, 2))
 
                 for j in range(batch_size):
                     db_idx = int(meta['db_index'][j].item())
@@ -709,6 +712,7 @@ def main():
         all_gts = all_gts[:idx]
         all_vis = all_vis[:idx]
         all_image_paths = all_image_paths[:idx]
+        all_missing_predictions = all_missing_predictions[:idx]
 
         all_preds_root = make_root_relative_2d_pixel(all_preds, root_joint_idx=args.root_joint_idx)
         all_gts_root = make_root_relative_2d_pixel(all_gts, root_joint_idx=args.root_joint_idx)
@@ -725,6 +729,11 @@ def main():
             auc_num_thresholds=args.auc_num_thresholds,
         )
         frame_mpjpe = stream_metrics['frame_mpjpe'] if stream_metrics is not None else []
+
+        missing_frames = [i for i in range(len(all_missing_predictions)) if all_missing_predictions[i]]
+        logger.info('Frames with no positive HRNet prediction: %d', len(missing_frames))
+        if missing_frames:
+            logger.info('Missing-prediction frame indices: %s', missing_frames)
 
         video_output_dir = args.video_output_dir if args.video_output_dir else final_output_dir
         os.makedirs(video_output_dir, exist_ok=True)
@@ -781,6 +790,7 @@ def main():
     all_sequence_names = ['UNKNOWN'] * num_samples
     all_image_paths = [''] * num_samples
     all_inference_times = np.zeros((num_samples,), dtype=np.float32)
+    all_missing_predictions = np.zeros((num_samples,), dtype=bool)
 
     idx = 0
     total_inference_time = 0.0
@@ -821,9 +831,11 @@ def main():
 
             c = meta['center'].numpy()
             s = meta['scale'].numpy()
-            preds, _ = get_final_preds(cfg, output.clone().cpu().numpy(), c, s)
+            heatmaps = output.clone().cpu().numpy()
+            preds, maxvals = get_final_preds(cfg, heatmaps, c, s)
 
             all_preds[idx:idx + batch_size, :, :] = preds[:, :, 0:2]
+            all_missing_predictions[idx:idx + batch_size] = np.all(maxvals <= 0.0, axis=(1, 2))
 
             for j in range(batch_size):
                 db_rec = valid_dataset.db[idx + j]
@@ -844,6 +856,7 @@ def main():
     all_sequence_names = all_sequence_names[:idx]
     all_image_paths = all_image_paths[:idx]
     all_inference_times = all_inference_times[:idx]
+    all_missing_predictions = all_missing_predictions[:idx]
 
     all_preds_root = make_root_relative_2d_pixel(all_preds, root_joint_idx=args.root_joint_idx)
     all_gts_root = make_root_relative_2d_pixel(all_gts, root_joint_idx=args.root_joint_idx)
@@ -873,6 +886,9 @@ def main():
         'fps': float(fps),
         'processed_frames': int(idx),
     }
+
+    missing_frames_all = [i for i in range(len(all_missing_predictions)) if all_missing_predictions[i]]
+    logger.info('Total frames with no positive HRNet prediction: %d', len(missing_frames_all))
 
     per_sequence_metrics = []
     sequence_indices_map = {}
@@ -910,6 +926,10 @@ def main():
         }
         sequence_frame_mpjpe_map[sequence_name] = seq_metrics['frame_mpjpe']
         per_sequence_metrics.append(seq_metrics)
+
+        seq_missing_frames = [sequence_indices[i] for i in range(len(sequence_indices)) if all_missing_predictions[sequence_indices[i]]]
+        if seq_missing_frames:
+            logger.info('  Sequence %s missing-prediction frames: %d', sequence_name, len(seq_missing_frames))
 
     for seq_metric in per_sequence_metrics:
         print_sequence_results(logger, seq_metric)

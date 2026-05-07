@@ -299,6 +299,7 @@ def infer_selected_frames(model, loader, dataset_obj, cfg_obj, device):
     all_vis = np.zeros((num_samples, cfg_obj.MODEL.NUM_JOINTS), dtype=np.float32)
     all_image_paths = [''] * num_samples
     all_frame_numbers = np.zeros((num_samples,), dtype=np.int64)
+    all_missing_predictions = np.zeros((num_samples,), dtype=bool)
 
     idx = 0
     with torch.no_grad():
@@ -332,8 +333,10 @@ def infer_selected_frames(model, loader, dataset_obj, cfg_obj, device):
 
             c = meta['center'].numpy()
             s = meta['scale'].numpy()
-            preds, _ = get_final_preds(cfg_obj, output.detach().cpu().numpy(), c, s)
+            heatmaps = output.detach().cpu().numpy()
+            preds, maxvals = get_final_preds(cfg_obj, heatmaps, c, s)
             all_preds[idx:idx + batch_size, :, :] = preds[:, :, 0:2]
+            all_missing_predictions[idx:idx + batch_size] = np.all(maxvals <= 0.0, axis=(1, 2))
 
             for j in range(batch_size):
                 db_idx = int(meta['db_index'][j].item())
@@ -351,6 +354,7 @@ def infer_selected_frames(model, loader, dataset_obj, cfg_obj, device):
         'vis': all_vis[:idx],
         'image_paths': all_image_paths[:idx],
         'frame_numbers': all_frame_numbers[:idx],
+        'missing_predictions': all_missing_predictions[:idx],
     }
 
 
@@ -449,6 +453,15 @@ def main():
     )
 
     infer_data = infer_selected_frames(model, loader, dataset_obj, cfg, device)
+
+    missing_frames = [
+        int(infer_data['frame_numbers'][i])
+        for i in range(len(infer_data['frame_numbers']))
+        if infer_data['missing_predictions'][i]
+    ]
+    print('Frames with no positive HRNet prediction: {}'.format(len(missing_frames)))
+    if missing_frames:
+        print('Missing-prediction frame numbers: {}'.format(missing_frames))
 
     output_root = args.output_dir
     if not os.path.isabs(output_root):
